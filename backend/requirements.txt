@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+python-multipart
+openai>=1.42.0
+aiohttp
+pydantic
