@@ -1,29 +1,31 @@
 import React, { useState } from "react";
-import WebRTCButton from "./components/WebRTCButton";
-import Waveform from "./components/Waveform";
-import TranscriptChat from "./components/TranscriptChat";
-import FileUploader from "./components/FileUploader";
+import Tabs from "./components/Tabs";
+import LiveTranscription from "./components/LiveTranscription";
+import FileTranscription from "./components/FileTranscription";
+import "./styles.css";
 
 export default function App() {
-  const [chunks, setChunks] = useState([]);
-  const [isStreaming, setIsStreaming] = useState(false);
+  const [activeTab, setActiveTab] = useState("live");
 
   return (
     <div className="app-container">
-      <h1>Speech-to-Text (OpenAI Realtime)</h1>
+      <header>
+        <h1>🎙️ Speech-to-Text Platform</h1>
+        <p className="subtitle">
+          Real-time transcription • Speaker diarization • AI summaries
+        </p>
+      </header>
 
-      <WebRTCButton
-        onTranscription={(event) =>
-          setChunks((prev) => [...prev, event])
-        }
-        onStreamingState={setIsStreaming}
-      />
+      <Tabs active={activeTab} onChange={setActiveTab} />
 
-      <Waveform isStreaming={isStreaming} />
+      <div className="tab-content">
+        {activeTab === "live" && <LiveTranscription />}
+        {activeTab === "file" && <FileTranscription />}
+      </div>
 
-      <TranscriptChat chunks={chunks} />
-
-      <FileUploader />
+      <footer>
+        <p>Powered by OpenAI GPT-4o Realtime API</p>
+      </footer>
     </div>
   );
 }
