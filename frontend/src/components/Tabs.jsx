@@ -2,8 +2,9 @@ import React from "react";
 
 export default function Tabs({ active, onChange }) {
   const tabs = [
-    { id: "live", label: "🎙️ Live Streaming", icon: "🔴" },
-    { id: "file", label: "📁 File Upload", icon: "📎" },
+    { id: "stream", label: "Live Streaming", icon: "🔴" },
+    { id: "record", label: "Record & Transcribe", icon: "🎤" },
+    { id: "file", label: "File Upload", icon: "📁" },
   ];
 
   return (

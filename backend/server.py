@@ -142,6 +142,12 @@ async def transcribe(
         print(f"🔀 Merge speakers: {should_merge}")
 
         # Validate file size
+        if file_size_mb < 0.001:  # Less than 1KB
+            raise HTTPException(
+                status_code=400,
+                detail="File is too small or empty. Please record at least 1 second of audio."
+            )
+
         if file_size_mb > 25:
             raise HTTPException(
                 status_code=400,
@@ -155,8 +161,8 @@ async def transcribe(
 
         print(f"💾 Saved to: {temp_path}")
 
-        # Convert MP3 to WAV (OpenAI seems to have issues with some MP3 encodings)
-        if suffix == ".mp3":
+        # Convert MP3 or WebM to WAV (OpenAI has issues with these formats)
+        if suffix in [".mp3", ".webm"]:
             converted_path = convert_to_wav(temp_path)
             if converted_path != temp_path:
                 # Use converted file
@@ -171,6 +177,22 @@ async def transcribe(
             final_path = temp_path
             mime_type = SUPPORTED_FORMATS.get(suffix, file.content_type or "audio/mpeg")
             final_filename = file.filename
+        
+        # Verify converted file exists and has content
+        if not os.path.exists(final_path):
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to process audio file"
+            )
+        
+        converted_size = os.path.getsize(final_path)
+        print(f"📊 Final file size: {converted_size / 1024:.2f} KB")
+        
+        if converted_size < 1000:  # Less than 1KB
+            raise HTTPException(
+                status_code=400,
+                detail="Processed audio file is too small. Please record longer audio."
+            )
         
         # Open and send to OpenAI with explicit MIME type
         with open(final_path, "rb") as audio_file:
@@ -232,7 +254,7 @@ async def transcribe(
         # Return more helpful error
         if "corrupted or unsupported" in error_msg:
             return {
-                "error": "The audio file format is not supported or corrupted. Try converting to WAV format.",
+                "error": "The audio file format is not supported or corrupted. Try recording for at least 2-3 seconds.",
                 "text": "",
                 "speakers": [],
                 "words": [],
@@ -263,11 +285,13 @@ async def transcribe_advanced(
     file: UploadFile = File(...),
     speaker_names: str = Form(None),
     merge_speakers: str = Form("true"),
+    identification_mode: str = Form("rename"),  # NEW: "rename" or "reference"
     reference_files: list[UploadFile] = File(None)
 ):
     """
-    Advanced transcription with known speaker identification
-    Requires voice reference audio for each named speaker
+    Advanced transcription with two speaker identification modes:
+    1. "rename": Simply rename detected speakers (Speaker 1 -> Alice)
+    2. "reference": Use voice samples to identify speakers by voice
     """
     temp_path = None
     converted_path = None
@@ -293,6 +317,7 @@ async def transcribe_advanced(
         
         print(f"📁 Uploading: {file.filename} ({file_size_mb:.2f} MB)")
         print(f"🔀 Merge speakers: {should_merge}")
+        print(f"🎯 Identification mode: {identification_mode}")
         
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(content)
@@ -314,19 +339,33 @@ async def transcribe_advanced(
             mime_type = SUPPORTED_FORMATS.get(suffix, file.content_type or "audio/mpeg")
             final_filename = file.filename
         
-        extra_body = {}
-        
         # Parse speaker names
-        names = None
+        names = []
         if speaker_names:
             names = [name.strip() for name in speaker_names.split(",") if name.strip()]
+            print(f"👤 Speaker names provided: {names}")
         
-        # Add speaker reference audio
-        if reference_files and any(ref.filename for ref in reference_files):
-            references = []
+        extra_body = {}
+        
+        # MODE 2: Reference-based identification
+        if identification_mode == "reference" and reference_files and any(ref.filename for ref in reference_files):
             valid_refs = [ref for ref in reference_files if ref.filename]
             
-            for ref_file in valid_refs:
+            if not names:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Speaker names are required when using reference files"
+                )
+            
+            if len(valid_refs) != len(names):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Mismatch: {len(names)} names but {len(valid_refs)} reference files. Must match exactly."
+                )
+            
+            references = []
+            
+            for idx, ref_file in enumerate(valid_refs):
                 ref_suffix = Path(ref_file.filename).suffix.lower()
                 
                 # Save reference file
@@ -341,24 +380,15 @@ async def transcribe_advanced(
                 with open(ref_path, "rb") as f:
                     data_url = f"data:{ref_mime};base64," + base64.b64encode(f.read()).decode("utf-8")
                     references.append(data_url)
+                
+                print(f"🎤 Reference {idx+1}: {ref_file.filename} → {names[idx]}")
             
             extra_body["known_speaker_references"] = references
-            print(f"🎤 Added {len(references)} speaker references")
-            
-            # Only add names if we have references AND the count matches
-            if names:
-                if len(names) == len(references):
-                    extra_body["known_speaker_names"] = names
-                    print(f"👤 Known speakers: {names}")
-                else:
-                    print(f"⚠️  Warning: {len(names)} names but {len(references)} references - ignoring names")
-                    print(f"   Names provided: {names}")
-                    print(f"   You must provide exactly one voice sample per speaker name")
+            extra_body["known_speaker_names"] = names
+            print(f"✅ Using voice-based identification for: {names}")
         
-        elif names:
-            # Names provided but no references
-            print(f"⚠️  Warning: Speaker names provided without voice references - ignoring names")
-            print(f"   To use speaker identification, upload a voice sample for each speaker")
+        # MODE 1 or no identification: Just transcribe
+        # (Names will be applied post-processing if mode is "rename")
         
         # Transcribe with diarization
         with open(final_path, "rb") as audio_file:
@@ -388,16 +418,46 @@ async def transcribe_advanced(
         if should_merge:
             speakers = merge_similar_speakers(speakers)
         
-        unique_speakers = list(set([s["speaker"] for s in speakers]))
-        print(f"👥 Final speaker count: {len(unique_speakers)}")
+        # Get detected speakers
+        detected_speakers = sorted(list(set([s["speaker"] for s in speakers])))
+        print(f"👥 Detected speakers: {detected_speakers}")
+        
+        # MODE 1: Rename speakers post-processing
+        if identification_mode == "rename" and names:
+            print(f"📝 Applying rename mode...")
+            
+            # Create mapping: Speaker 1 -> Alice, Speaker 2 -> Bob, etc.
+            speaker_mapping = {}
+            for idx, detected in enumerate(detected_speakers):
+                if idx < len(names):
+                    speaker_mapping[detected] = names[idx]
+                    print(f"   {detected} → {names[idx]}")
+                else:
+                    speaker_mapping[detected] = detected  # Keep original if not enough names
+                    print(f"   {detected} → {detected} (no name provided)")
+            
+            # Apply mapping
+            for segment in speakers:
+                segment["speaker"] = speaker_mapping.get(segment["speaker"], segment["speaker"])
+            
+            identified_speakers = [speaker_mapping.get(s, s) for s in detected_speakers]
+        else:
+            identified_speakers = detected_speakers
+        
+        print(f"👥 Final speakers: {identified_speakers}")
 
         # Generate summary
-        speaker_list = ", ".join(unique_speakers)
+        speaker_list = ", ".join(identified_speakers)
+        summary_prompt = f"Summarize this conversation"
+        if len(identified_speakers) > 1:
+            summary_prompt += f" between {speaker_list}"
+        summary_prompt += f":\n\n{transcription.text}"
+        
         summary_response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{
                 "role": "user",
-                "content": f"Summarize this conversation between {speaker_list}:\n\n{transcription.text}"
+                "content": summary_prompt
             }]
         )
 
@@ -406,7 +466,9 @@ async def transcribe_advanced(
             "speakers": speakers,
             "words": [],
             "summary": summary_response.choices[0].message.content,
-            "identified_speakers": unique_speakers
+            "identified_speakers": identified_speakers,
+            "identification_mode": identification_mode,
+            "speaker_mapping": speaker_mapping if identification_mode == "rename" and names else None
         }
 
     except HTTPException:
@@ -418,17 +480,26 @@ async def transcribe_advanced(
         import traceback
         traceback.print_exc()
         
-        # Provide helpful error message
+        # Provide helpful error messages
         if "same number of items" in error_msg:
             return {
-                "error": "To identify speakers by name, you must provide a voice sample for each speaker. Upload reference audio files along with the speaker names.",
+                "error": "The number of speaker names must match the number of reference files exactly.",
                 "text": "",
                 "speakers": [],
                 "words": [],
                 "summary": ""
             }
         
-        return {"error": error_msg}
+        if "Mismatch" in error_msg:
+            return {"error": error_msg}
+        
+        return {
+            "error": error_msg,
+            "text": "",
+            "speakers": [],
+            "words": [],
+            "summary": ""
+        }
     
     finally:
         # Cleanup temporary files

@@ -12,6 +12,9 @@ const SPEAKER_COLORS = [
 function formatTimestamp(seconds) {
   if (!seconds && seconds !== 0) return null;
   
+  // Handle string timestamps (like "now" or "10:30:45")
+  if (typeof seconds === "string") return seconds;
+  
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
   return `${mins}:${secs.toString().padStart(2, '0')}`;
@@ -22,18 +25,37 @@ function groupConsecutiveSpeakers(transcripts) {
   
   const grouped = [];
   let current = {
+    id: transcripts[0].id,
     speaker: transcripts[0].speaker,
     text: transcripts[0].text,
     start_time: transcripts[0].timestamp || transcripts[0].start_time,
     end_time: transcripts[0].end || transcripts[0].end_time,
+    isPartial: transcripts[0].isPartial || false,
     segments: [transcripts[0]]
   };
   
   for (let i = 1; i < transcripts.length; i++) {
     const item = transcripts[i];
     
-    // If same speaker, merge
-    if (item.speaker === current.speaker) {
+    // Don't merge if this is a partial transcript (real-time)
+    if (item.isPartial) {
+      if (current.segments.length > 0) {
+        grouped.push(current);
+      }
+      grouped.push({
+        id: item.id,
+        speaker: item.speaker,
+        text: item.text,
+        start_time: item.timestamp || item.start_time,
+        end_time: item.end || item.end_time,
+        isPartial: true,
+        segments: [item]
+      });
+      continue;
+    }
+    
+    // If same speaker and not partial, merge
+    if (item.speaker === current.speaker && !current.isPartial) {
       current.text += " " + item.text;
       current.end_time = item.end || item.end_time;
       current.segments.push(item);
@@ -41,30 +63,39 @@ function groupConsecutiveSpeakers(transcripts) {
       // Different speaker, save current and start new
       grouped.push(current);
       current = {
+        id: item.id,
         speaker: item.speaker,
         text: item.text,
         start_time: item.timestamp || item.start_time,
         end_time: item.end || item.end_time,
+        isPartial: item.isPartial || false,
         segments: [item]
       };
     }
   }
   
   // Don't forget the last group
-  grouped.push(current);
+  if (current.segments.length > 0) {
+    grouped.push(current);
+  }
   
   return grouped;
 }
 
-export default function TranscriptDisplay({ transcripts, title, emptyMessage }) {
+export default function TranscriptDisplay({ 
+  transcripts, 
+  title = "Transcript", 
+  emptyMessage = "No transcripts yet...",
+  autoScroll = true 
+}) {
   const containerRef = useRef(null);
 
-  // Auto-scroll to bottom
+  // Auto-scroll to bottom when new transcripts arrive
   useEffect(() => {
-    if (containerRef.current) {
+    if (autoScroll && containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
-  }, [transcripts]);
+  }, [transcripts, autoScroll]);
 
   const getSpeakerColor = (speaker) => {
     const hash = speaker.split("").reduce((acc, char) => {
@@ -78,7 +109,7 @@ export default function TranscriptDisplay({ transcripts, title, emptyMessage }) 
       <div className="transcript-container">
         {title && <h3>{title}</h3>}
         <div className="transcript-box empty">
-          <p>{emptyMessage || "No transcripts yet..."}</p>
+          <p>{emptyMessage}</p>
         </div>
       </div>
     );
@@ -97,8 +128,8 @@ export default function TranscriptDisplay({ transcripts, title, emptyMessage }) 
           
           return (
             <div
-              key={idx}
-              className="transcript-bubble"
+              key={item.id || idx}
+              className={`transcript-bubble ${item.isPartial ? "partial" : ""}`}
               style={{ borderLeftColor: color }}
             >
               <div className="bubble-header">

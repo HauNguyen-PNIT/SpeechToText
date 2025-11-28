@@ -52,7 +52,8 @@ speech-to-text-platform/
 │   │   ├── components/
 │   │   │   ├── LiveTranscription.jsx
 │   │   │   ├── FileTranscription.jsx
-│   │   │   └── TranscriptDisplay.jsx
+│   │   │   ├── TranscriptDisplay.jsx
+|   |   |   └── Tabs.jsx
 │   │   ├── App.jsx
 │   │   └── styles.css
 │   ├── index.html

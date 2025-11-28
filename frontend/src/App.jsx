@@ -1,11 +1,12 @@
 import React, { useState } from "react";
 import Tabs from "./components/Tabs";
-import LiveTranscription from "./components/LiveTranscription";
+import LiveStreamingTranscription from "./components/LiveStreamingTranscription";
+import RecordTranscription from "./components/RecordTranscription";
 import FileTranscription from "./components/FileTranscription";
 import "./styles.css";
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState("live");
+  const [activeTab, setActiveTab] = useState("stream");
 
   return (
     <div className="app-container">
@@ -19,7 +20,8 @@ export default function App() {
       <Tabs active={activeTab} onChange={setActiveTab} />
 
       <div className="tab-content">
-        {activeTab === "live" && <LiveTranscription />}
+        {activeTab === "stream" && <LiveStreamingTranscription />}
+        {activeTab === "record" && <RecordTranscription />}
         {activeTab === "file" && <FileTranscription />}
       </div>
 
